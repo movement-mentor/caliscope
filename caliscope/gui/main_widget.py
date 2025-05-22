@@ -24,6 +24,7 @@ from caliscope.controller import Controller
 from caliscope.gui.camera_management.multiplayback_widget import (
     MultiIntrinsicPlaybackWidget,
 )
+from caliscope.gui.camera_management.record_single_camera import RecordSingleCameraWidget
 from caliscope.gui.charuco_widget import CharucoWidget
 from caliscope.gui.log_widget import LogWidget
 from caliscope.gui.post_processing_widget import PostProcessingWidget
@@ -105,7 +106,7 @@ class MainWindow(QMainWindow):
         self.charuco_widget = CharucoWidget(self.controller)
         self.central_tab.addTab(self.charuco_widget, "Charuco")
 
-        logger.info("About to load Camera tab")
+        logger.info("About to load Camera tab (Intrinsic Calibration)")
         if self.controller.cameras_loaded:
             logger.info("Creating MultiIntrinsic Playback Widget")
             self.intrinsic_cal_widget = MultiIntrinsicPlaybackWidget(self.controller)
@@ -114,9 +115,25 @@ class MainWindow(QMainWindow):
             self.intrinsic_cal_widget = QWidget()
 
         logger.info("finished loading camera tab")
-        self.central_tab.addTab(self.intrinsic_cal_widget, "Cameras")
-        self.central_tab.setTabEnabled(self.find_tab_index_by_title("Cameras"), self.controller.cameras_loaded)
-        logger.info("Camera tab enabled")
+        self.central_tab.addTab(self.intrinsic_cal_widget, "Intrinsic Calibration")
+        self.central_tab.setTabEnabled(self.find_tab_index_by_title("Intrinsic Calibration"), self.controller.cameras_loaded)
+        logger.info("Intrinsic Calibration tab enabled/disabled based on camera load state")
+
+        # Add RecordSingleCameraWidget Tab
+        logger.info("About to load Record Single Camera tab")
+        if hasattr(self.controller, 'live_session'):
+            logger.info("Creating RecordSingleCameraWidget")
+            self.record_single_camera_widget = RecordSingleCameraWidget(self.controller.live_session)
+            logger.info("RecordSingleCameraWidget created")
+            record_single_camera_tab_enabled = True
+        else:
+            logger.info("Conditions not met for RecordSingleCameraWidget (cameras not loaded or no live_session). Creating dummy widget.")
+            self.record_single_camera_widget = QWidget()
+            record_single_camera_tab_enabled = False
+        
+        self.central_tab.addTab(self.record_single_camera_widget, "Record Single Camera")
+        self.central_tab.setTabEnabled(self.find_tab_index_by_title("Record Single Camera"), record_single_camera_tab_enabled)
+        logger.info(f"Record Single Camera tab added and enabled state set to {record_single_camera_tab_enabled}")
 
         logger.info("About to load capture volume tab")
         if self.controller.capture_volume_loaded:

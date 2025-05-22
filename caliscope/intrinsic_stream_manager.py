@@ -20,7 +20,7 @@ class IntrinsicStreamManager:
         tracker: Tracker = None,
     ) -> None:
         self.recording_dir = recording_dir
-        self.cameras = cameras
+        self.cameras = cameras   # dict of CameraData objects, not caliscope.cameras.cameras
         self.tracker = tracker
         self.load_stream_tools()
 
@@ -36,7 +36,7 @@ class IntrinsicStreamManager:
                 port=camera.port,
                 rotation_count=camera.rotation_count,
                 tracker=self.tracker,
-                break_on_last=False,
+                break_on_last=False
             )
 
             self.streams[camera.port] = stream
@@ -77,7 +77,7 @@ class IntrinsicStreamManager:
         """
         start_frame_index = self.streams[port].start_frame_index
         last_frame_index = self.streams[port].last_frame_index
-
+        logger.info(f"For port: {port}: Start frame index: {start_frame_index}, last frame index: {last_frame_index}")
         return last_frame_index - start_frame_index + 1
 
     def update_charuco(self, charuco_tracker: CharucoTracker):

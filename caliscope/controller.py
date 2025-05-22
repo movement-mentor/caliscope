@@ -27,6 +27,8 @@ from caliscope.trackers.charuco_tracker import CharucoTracker
 from caliscope.trackers.tracker_enum import TrackerEnum
 from caliscope.workspace_guide import WorkspaceGuide
 
+from caliscope.session.session import LiveSession
+
 logger = caliscope.logger.get(__name__)
 
 
@@ -62,6 +64,9 @@ class Controller(QObject):
         self.config = Configurator(self.workspace)
         self.camera_count = self.config.get_camera_count()
 
+        self.live_session = LiveSession(self.config)
+        self.live_session._find_cameras()
+
         # streams will be used to play back recorded video with tracked markers to select frames
         self.camera_array = CameraArray({})  # empty camera array at init
         logger.info("Retrieving charuco from config")
@@ -89,6 +94,7 @@ class Controller(QObject):
                 self.load_intrinsic_stream_manager()
                 self.cameras_loaded = True
             else:
+                logger.info("Not all intrinsic videos available...not loading cameras")
                 self.cameras_loaded = False
 
             logger.info("Assess whether to load capture volume")
@@ -144,6 +150,7 @@ class Controller(QObject):
         return self.config.dict["charuco"]
 
     def update_charuco(self, charuco: Charuco):
+        logger.info("Updating charuco")
         self.charuco = charuco
         self.config.save_charuco(self.charuco)
         self.charuco_tracker = CharucoTracker(self.charuco)
@@ -196,13 +203,19 @@ class Controller(QObject):
         """
         # load all previously configured data if it is there
         preconfigured_cameras = self.config.get_configured_camera_data()
+        ports_with_videos = self.workspace_guide.get_ports_in_dir(self.workspace_guide.intrinsic_dir)
+
+        preconfigured_camera_ports = list(preconfigured_cameras.keys())
+        for port in preconfigured_camera_ports:
+            if port not in ports_with_videos:
+                preconfigured_cameras.pop(port)
+
         self.camera_array = CameraArray(preconfigured_cameras)
 
-        # double check that no new camera associated files have been placed in the intrinsic calibration folder
-        all_ports = self.workspace_guide.get_ports_in_dir(self.workspace_guide.intrinsic_dir)
-
-        for port in all_ports:
+        # check that no new camera associated files have been placed in the intrinsic calibration folder
+        for port in ports_with_videos:
             if port not in self.camera_array.cameras:
+                logger.info(f"Adding new camera at port {port}")
                 self._add_camera_from_source(port)
 
     def _add_camera_from_source(self, port: int):

@@ -21,7 +21,7 @@ import platform
 import time
 
 import cv2
-
+import glob
 import caliscope.logger
 
 logger = caliscope.logger.get(__name__)
@@ -41,12 +41,14 @@ class Camera:
             if os.name == "nt":  # windows
                 self.connect_API = cv2.CAP_DSHOW
             else:  # UNIX variant
-                self.connect_API = cv2.CAP_ANY
+                self.connect_API = cv2.CAP_V4L2
 
         # check if source has a data feed before proceeding...if not it is
         # either in use or fake
         logger.info(f"Attempting to connect video capture at port {port}")
+        
         test_capture = cv2.VideoCapture(port, self.connect_API)
+
         for _ in range(0, TEST_FRAME_COUNT):
             good_read, frame = test_capture.read()
 
@@ -55,6 +57,9 @@ class Camera:
             logger.info(f"Good read at port {port}...proceeding")
             self.port = port
             self.capture = test_capture
+            self.capture.set(cv2.CAP_PROP_FPS, 30)
+            self.capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc('M','J','P','G'))
+            # self.capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"AV01"))
             self.active_port = True
 
             # limit buffer size so that you are always reading the latest frame
@@ -196,6 +201,93 @@ class Camera:
 
     def connect(self):
         self.capture = cv2.VideoCapture(self.port, self.connect_API)
+
+        # Reapply important settings after reconnection
+        self.capture.set(cv2.CAP_PROP_FPS, 30)
+        self.capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc('M','J','P','G'))
+        self.capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
+    def change_resolution(self, width, height):
+        """
+        Change the camera resolution by disconnecting and reconnecting the camera.
+        
+        Args:
+            width (int): Desired width in pixels
+            height (int): Desired height in pixels
+            
+        Returns:
+            tuple: The actual resolution after the change attempt
+        """
+        logger.info(f"Changing resolution of camera {self.port} to {width}x{height}")
+        
+        # Store current state
+        was_active = self.active_port
+        
+        # Release and reconnect
+        self.disconnect()
+        self.connect()
+        
+        # Set new resolution
+        self.size = (width, height)
+        actual_resolution = self.size
+        
+        # Log the result
+        logger.info(f"Camera {self.port} resolution is now {actual_resolution}")
+        
+        return actual_resolution
+    
+    def get_all_available_resolutions(self):
+        """
+        Test all common resolutions to find which ones are supported by this camera.
+        This is a more comprehensive check than set_possible_resolutions().
+        
+        Returns:
+            list: List of supported resolutions as (width, height) tuples
+        """
+        logger.info(f"Checking all available resolutions for camera {self.port}")
+        
+        # Store original resolution to restore later
+        original_resolution = self.size
+        
+        # Store current state
+        was_active = self.active_port
+        
+        # List of resolutions to check - extended list for more thorough testing
+        resolutions_to_check = [
+            (320, 240), (352, 240), (352, 288), (352, 480), (352, 576),
+            (480, 320), (480, 480), (480, 576), (528, 480), (544, 480),
+            (544, 576), (640, 360), (640, 480), (704, 480), (704, 576),
+            (720, 480), (720, 576), (800, 600), (960, 540), (960, 720),
+            (1024, 768), (1280, 720), (1280, 800), (1280, 960), (1280, 1024),
+            (1366, 768), (1440, 900), (1440, 1080), (1600, 900), (1680, 1050),
+            (1920, 1080), (1920, 1200), (2048, 1536), (2560, 1440), (2560, 1600),
+            (3840, 2160), (4096, 2160)
+        ]
+        
+        available_resolutions = []
+        
+        # Test each resolution
+        for resolution in resolutions_to_check:
+            # Disconnect and reconnect for each test to ensure clean state
+            self.disconnect()
+            self.connect()
+            
+            # Try to set resolution
+            self.size = resolution
+            actual_resolution = self.size
+            
+            # Check if the resolution was set successfully
+            if resolution == actual_resolution:
+                available_resolutions.append(resolution)
+                logger.info(f"Camera {self.port} supports resolution {resolution}")
+            
+        # Restore original resolution
+        self.disconnect()
+        self.connect()
+        self.size = original_resolution
+        
+        logger.info(f"Camera {self.port} has {len(available_resolutions)} available resolutions")
+        return available_resolutions
 
     def calibration_summary(self):
         # Calibration output presented in label on far right

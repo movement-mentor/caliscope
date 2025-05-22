@@ -1,23 +1,24 @@
 # %%
 
-# NOTE: Conversions are being made here between inches and cm because
-# this seems like a reasonable scale for discussing the board, but when
-# it is actually created in OpenCV, the board height is expressed
+# NOTE: All measurements are now in millimeters (mm) as per standard metric conventions
+# When the board is actually created in OpenCV, the board height is expressed
 # in meters as a standard convention of science, and to improve
 # readability of 3D positional output downstream
 
 from collections import defaultdict
 from itertools import combinations
+import os
 
 import cv2
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QImage, QPixmap
+from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.units import mm
 
 import caliscope.logger
 
 logger = caliscope.logger.get(__name__)
-
-INCHES_PER_CM = 0.393701
 
 class Charuco:
     """
@@ -29,64 +30,31 @@ class Charuco:
         self,
         columns,
         rows,
-        board_height,
-        board_width,
+        square_marker_size_mm,
         dictionary="DICT_4X4_50",
-        units="inch",
         aruco_scale=0.75,
-        square_size_overide_cm=None,
         inverted=False,
-        legacy_pattern=False
-    ):  # after printing, measure actual and return to overide
+    ):
         """
         Create board based on shape and dimensions
-        square_size_overide_cm: correct for the actual printed size of the board
+        All measurements are in millimeters (mm)
+        
+        Parameters:        board_height_mm - height of the board in mm
+        board_width_mm - width of the board in mm
+        checker_width_mm - width of a checker square in mm (calculated from board dimensions if None)
+        columns - number of columns in the board
+        rows - number of rows in the board
+        dictionary - ArUco dictionary to use
+        aruco_scale - scale of ArUco markers relative to checker size
+        inverted - whether to invert colors
+        legacy_pattern - whether to use legacy pattern
         """
         self.columns = columns
         self.rows = rows
-
-        self.board_height = board_height
-        self.board_width = board_width
+        self.square_marker_size_mm = square_marker_size_mm 
         self.dictionary = dictionary
-
-        self.units = units
         self.aruco_scale = aruco_scale
-        # if square length not provided, calculate based on board dimensions
-        # to maximize size of squares
-        self.square_size_overide_cm = square_size_overide_cm
         self.inverted = inverted
-        self.legacy_pattern = legacy_pattern
-
-    @property
-    def board_height_cm(self):
-        """Internal calculations will always use mm for consistency"""
-        if self.units == "inch":
-            return self.board_height / INCHES_PER_CM
-        else:
-            return self.board_height
-
-    @property
-    def board_width_cm(self):
-        """Internal calculations will always use mm for consistency"""
-        if self.units == "inch":
-            return self.board_width / INCHES_PER_CM
-        else:
-            return self.board_width
-
-    def board_height_scaled(self, pixmap_scale):
-        if self.board_height_cm > self.board_width_cm:
-            scaled_height = int(pixmap_scale)
-        else:
-            scaled_height = int(pixmap_scale * (self.board_height_cm/self.board_width_cm))
-        return scaled_height
-
-    def board_width_scaled(self, pixmap_scale):
-        if self.board_height_cm > self.board_width_cm:
-            scaled_width = int(pixmap_scale * (self.board_width_cm/self.board_height_cm))
-        else:
-            scaled_width = int(pixmap_scale)
-
-        return scaled_width
 
     @property
     def dictionary_object(self):
@@ -96,35 +64,25 @@ class Charuco:
 
     @property
     def board(self):
-        if self.square_size_overide_cm:
-            square_length = self.square_size_overide_cm / 100  # note: in cm within GUI
-        else:
-            board_height_m = self.board_height_cm / 100
-            board_width_m = self.board_width_cm / 100
-
-            square_length = min([board_height_m / self.rows, board_width_m / self.columns])
-        logger.info(f"Creating charuco with square length of {round(square_length,4)}")
-
-        aruco_length = square_length * self.aruco_scale
+        marker_length = self.square_marker_size_mm * self.aruco_scale
         # create the board
         board = cv2.aruco.CharucoBoard(size=(self.columns, self.rows),
-                                      squareLength= square_length,
-                                      markerLength= aruco_length,
-                                      dictionary= self.dictionary_object,
+                                      squareLength=self.square_marker_size_mm,
+                                      markerLength=marker_length,
+                                      dictionary=self.dictionary_object,
         )
 
-        logger.info(f"Setting legacy pattern of board to {self.legacy_pattern}")
-        board.setLegacyPattern(self.legacy_pattern)
         return board
 
     def board_img(self, pixmap_scale=1000):
         """
         returns a cv2 image (numpy array) of the board
         smaller scale image by default for display to GUI
-        provide larger max_edge_length to get printer-ready png
+        provide larger pixmap_scale to get printer-ready image
         """
-        img = self.board.generateImage((self.board_width_scaled(pixmap_scale=pixmap_scale),
-                                        self.board_height_scaled(pixmap_scale=pixmap_scale)))
+
+        ratio = self.columns / self.rows
+        img = self.board.generateImage((pixmap_scale, int(pixmap_scale * ratio)))
         if self.inverted:
             img = ~img
 
@@ -145,20 +103,135 @@ class Charuco:
             Qt.AspectRatioMode.KeepAspectRatio,
             Qt.TransformationMode.SmoothTransformation,
         )
-        return QPixmap.fromImage(p)
+        return QPixmap.fromImage(charuco_QImage)
 
-    def save_image(self, path):
-        """
-        Saving image at 10x higher resolution than used for GUI
-        """
-        cv2.imwrite(path, self.board_img(pixmap_scale=10000))
-
-    def save_mirror_image(self, path):
-        """
-        Saving image at 10x higher resolution than used for GUI
-        """
-        mirror = cv2.flip(self.board_img(pixmap_scale=10000), 1)
-        cv2.imwrite(path, mirror)
+    # def save_pdf(self, path):
+    #     """
+    #     Save the charuco board as a PDF file.
+    #     The board is scaled to fit within the A4 page size while maintaining aspect ratio.
+    #     """
+    #     # If path doesn't end with .pdf, add it
+    #     if not path.lower().endswith('.pdf'):
+    #         path = path + '.pdf'
+            
+    #     # Generate high-resolution image
+    #     img = self.board_img(pixmap_scale=10000)
+    #     if self.inverted:
+    #         img = ~img
+            
+    #     # Get image dimensions
+    #     img_height, img_width = img.shape[:2]
+        
+    #     # Define page size in mm (A4)
+    #     page_width, page_height = A4[0] / mm, A4[1] / mm
+        
+    #     # Calculate scaling to fit within the page with some margin
+    #     margin = 10  # mm
+    #     max_width = page_width - 2 * margin
+    #     max_height = page_height - 2 * margin
+        
+    #     # Determine scaling factor to fit within page while maintaining aspect ratio
+    #     scale = min(max_width / img_width, max_height / img_height)
+        
+    #     # Calculate final dimensions in mm
+    #     final_width = img_width * scale
+    #     final_height = img_height * scale
+        
+    #     # Calculate position to center on page
+    #     x_offset = (page_width - final_width) / 2
+    #     y_offset = (page_height - final_height) / 2
+        
+    #     # Create PDF
+    #     c = canvas.Canvas(path, pagesize=A4)
+        
+    #     # Save temporary image file
+    #     temp_img_path = os.path.splitext(path)[0] + "_temp.png"
+    #     cv2.imwrite(temp_img_path, img)
+        
+    #     # Place image in PDF
+    #     c.drawImage(temp_img_path, x_offset * mm, y_offset * mm, 
+    #                width=final_width * mm, height=final_height * mm)
+        
+    #     # Add metadata
+    #     c.setFont("Helvetica", 8)
+    #     # Add actual dimensions text at bottom of page
+    #     info_text = f"Board dimensions: {self.board_width_mm}mm x {self.board_height_mm}mm, "
+    #     info_text += f"Checker width: {self.checker_width_mm or 'auto'}mm, "
+    #     info_text += f"Grid: {self.rows}x{self.columns}"
+        
+    #     c.drawString(margin * mm, margin * mm / 2, info_text)
+        
+    #     # Save and close PDF
+    #     c.save()
+        
+    #     # Remove temporary image file
+    #     os.remove(temp_img_path)
+        
+    #     logger.info(f"Saved Charuco board as PDF to {path}")
+        
+    # def save_mirror_pdf(self, path):
+    #     """
+    #     Save a mirrored version of the charuco board as a PDF file.
+    #     """
+    #     # If path doesn't end with .pdf, add it
+    #     if not path.lower().endswith('.pdf'):
+    #         path = path + '.pdf'
+            
+    #     # Generate high-resolution image and mirror it
+    #     img = self.board_img(pixmap_scale=10000)
+    #     if self.inverted:
+    #         img = ~img
+    #     mirror = cv2.flip(img, 1)  # Flip horizontally
+        
+    #     # Get image dimensions
+    #     img_height, img_width = mirror.shape[:2]
+        
+    #     # Define page size in mm (A4)
+    #     page_width, page_height = A4[0] / mm, A4[1] / mm
+        
+    #     # Calculate scaling to fit within the page with some margin
+    #     margin = 10  # mm
+    #     max_width = page_width - 2 * margin
+    #     max_height = page_height - 2 * margin
+        
+    #     # Determine scaling factor to fit within page while maintaining aspect ratio
+    #     scale = min(max_width / img_width, max_height / img_height)
+        
+    #     # Calculate final dimensions in mm
+    #     final_width = img_width * scale
+    #     final_height = img_height * scale
+        
+    #     # Calculate position to center on page
+    #     x_offset = (page_width - final_width) / 2
+    #     y_offset = (page_height - final_height) / 2
+        
+    #     # Create PDF
+    #     c = canvas.Canvas(path, pagesize=A4)
+        
+    #     # Save temporary image file
+    #     temp_img_path = os.path.splitext(path)[0] + "_temp_mirror.png"
+    #     cv2.imwrite(temp_img_path, mirror)
+        
+    #     # Place image in PDF
+    #     c.drawImage(temp_img_path, x_offset * mm, y_offset * mm, 
+    #                width=final_width * mm, height=final_height * mm)
+        
+    #     # Add metadata
+    #     c.setFont("Helvetica", 8)
+    #     # Add actual dimensions text at bottom of page
+    #     info_text = f"Board dimensions: {self.board_width_mm}mm x {self.board_height_mm}mm, "
+    #     info_text += f"Checker width: {self.checker_width_mm or 'auto'}mm, "
+    #     info_text += f"Grid: {self.rows}x{self.columns} (MIRRORED)"
+        
+    #     c.drawString(margin * mm, margin * mm / 2, info_text)
+        
+    #     # Save and close PDF
+    #     c.save()
+        
+    #     # Remove temporary image file
+    #     os.remove(temp_img_path)
+        
+    #     logger.info(f"Saved mirrored Charuco board as PDF to {path}")
 
     def get_connected_points(self):
         """
@@ -208,10 +281,10 @@ class Charuco:
     def summary(self):
         text = f"Columns: {self.columns}\n"
         text = text + f"Rows: {self.rows}\n"
-        text = text + f"Board Size: {self.board_width} x {self.board_height} {self.units}\n"
+        text = text + f"Square Size: {self.square_marker_size_mm} mm\n"
+        text = text + f"Marker Size: {self.square_marker_size_mm * self.aruco_scale} mm\n"
         text = text + f"Inverted:  {self.inverted}\n"
         text = text + "\n"
-        text = text + f"Square Edge Length: {self.square_size_overide_cm} cm"
         return text
 
 
@@ -242,8 +315,15 @@ ARUCO_DICTIONARIES = {
 
 
 if __name__ == "__main__":
-    charuco = Charuco(4, 5, 4, 8.5, aruco_scale=0.75, units="inch", inverted=True, square_size_overide_cm=5.25)
-    charuco.save_image("test_charuco.png")
+    # Create a test board with all dimensions in mm
+    charuco = Charuco(
+        columns=4, 
+        rows=5, 
+        inverted=True
+    )
+    charuco.save_pdf("test_charuco.pdf")
+    charuco.save_mirror_pdf("test_charuco_mirror.pdf")
+    
     width, height = charuco.board_img().shape
     logger.info(f"Board width is {width}\nBoard height is {height}")
 

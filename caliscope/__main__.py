@@ -19,3 +19,6 @@ def CLI_parser():
         if launch_widget in ["record", "rec", "-r"]:
             pass
             # launch_recording_widget(session_path)
+
+if __name__ == "__main__":
+    CLI_parser()

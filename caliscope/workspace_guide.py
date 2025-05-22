@@ -37,7 +37,12 @@ class WorkspaceGuide:
         files = []
         target_ports = [i for i in range(1, self.camera_count + 1)]
         current_ports = self.get_ports_in_dir(directory)
+        logger.warning(f"current_ports: {current_ports}")
+        logger.warning(f"target_ports: {target_ports}")
 
+        if len(current_ports) == len(target_ports): # We have all the ports required but they are not named like port_1, port_2, etc.
+            return "NONE"
+        
         missing_ports = [port for port in target_ports if port not in current_ports]
         for port in missing_ports:
             files.append(f"port_{port}.mp4")
